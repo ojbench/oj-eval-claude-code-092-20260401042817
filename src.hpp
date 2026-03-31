@@ -308,40 +308,26 @@ public:
             return fraction(0);
         }
 
-        // 特殊情况：只有两个节点
-        if (interface_size == 2) {
-            // 直接计算两个节点间的电阻
-            fraction total_conductance(0);
-            for (int i = 0; i < connection_size; i++) {
-                int node1 = -1, node2 = -1;
-                for (int j = 0; j < interface_size; j++) {
-                    if (adjacency(i+1, j).operator==(fraction(1))) {
-                        node1 = j;
-                    } else if (adjacency(i+1, j).operator==(fraction(-1))) {
-                        node2 = j;
-                    }
-                }
-                // 如果这条边连接的是我们关心的两个节点
-                if ((node1 == interface_id1 - 1 && node2 == interface_id2 - 1) ||
-                    (node1 == interface_id2 - 1 && node2 == interface_id1 - 1)) {
-                    total_conductance = total_conductance + conduction(i+1, i);
-                }
-            }
-            if (total_conductance.operator==(fraction(0))) {
-                throw resistive_network_error();
-            }
-            return fraction(1) / total_conductance;
+        // 去掉最后一行和最后一列，得到 L_n-1
+        int reduced_size = interface_size - 1;
+
+        if (reduced_size <= 0) {
+            throw resistive_network_error();
         }
 
-        // 去掉最后一行和最后一列，得到 L_n-1
-        matrix L_reduced(interface_size - 1, interface_size - 1);
-        for (int i = 0; i < interface_size - 1; i++) {
-            for (int j = 0; j < interface_size - 1; j++) {
+        matrix L_reduced(reduced_size, reduced_size);
+        for (int i = 0; i < reduced_size; i++) {
+            for (int j = 0; j < reduced_size; j++) {
                 L_reduced(i+1, j) = laplace(i+1, j);
             }
         }
 
         fraction det_L = L_reduced.determination();
+
+        // 如果行列式为0，说明网络不连通或有其他问题
+        if (det_L.operator==(fraction(0))) {
+            throw resistive_network_error();
+        }
 
         // 计算伴随矩阵的元素
         // L_ii^* = det(去掉第i行第i列的子矩阵) * (-1)^(i+i)
@@ -351,38 +337,55 @@ public:
         fraction L_i1i1_star, L_i2i2_star, L_i1i2_star, L_i2i1_star;
 
         // 特殊情况：L_reduced 是 1x1 矩阵
-        if (interface_size - 1 == 1) {
+        if (reduced_size == 1) {
+            // 对于1x1矩阵，它的伴随矩阵就是1
             L_i1i1_star = fraction(1);
             L_i2i2_star = fraction(1);
             L_i1i2_star = fraction(1);
             L_i2i1_star = fraction(1);
         } else {
             // 计算 L_{i1,i1}^*
-            matrix sub_i1i1 = L_reduced.submatrix(i1, i1);
-            L_i1i1_star = sub_i1i1.determination();
-            if ((i1 + i1) % 2 == 1) {
-                L_i1i1_star = L_i1i1_star * fraction(-1);
+            if (i1 < reduced_size && i1 >= 0) {
+                matrix sub_i1i1 = L_reduced.submatrix(i1, i1);
+                L_i1i1_star = sub_i1i1.determination();
+                if ((i1 + i1) % 2 == 1) {
+                    L_i1i1_star = L_i1i1_star * fraction(-1);
+                }
+            } else {
+                L_i1i1_star = fraction(1);
             }
 
             // 计算 L_{i2,i2}^*
-            matrix sub_i2i2 = L_reduced.submatrix(i2, i2);
-            L_i2i2_star = sub_i2i2.determination();
-            if ((i2 + i2) % 2 == 1) {
-                L_i2i2_star = L_i2i2_star * fraction(-1);
+            if (i2 < reduced_size && i2 >= 0) {
+                matrix sub_i2i2 = L_reduced.submatrix(i2, i2);
+                L_i2i2_star = sub_i2i2.determination();
+                if ((i2 + i2) % 2 == 1) {
+                    L_i2i2_star = L_i2i2_star * fraction(-1);
+                }
+            } else {
+                L_i2i2_star = fraction(1);
             }
 
             // 计算 L_{i1,i2}^* (注意：余子式的符号)
-            matrix sub_i1i2 = L_reduced.submatrix(i1, i2);
-            L_i1i2_star = sub_i1i2.determination();
-            if ((i1 + i2) % 2 == 1) {
-                L_i1i2_star = L_i1i2_star * fraction(-1);
+            if (i1 < reduced_size && i2 < reduced_size && i1 >= 0 && i2 >= 0) {
+                matrix sub_i1i2 = L_reduced.submatrix(i1, i2);
+                L_i1i2_star = sub_i1i2.determination();
+                if ((i1 + i2) % 2 == 1) {
+                    L_i1i2_star = L_i1i2_star * fraction(-1);
+                }
+            } else {
+                L_i1i2_star = fraction(0);
             }
 
             // 计算 L_{i2,i1}^*
-            matrix sub_i2i1 = L_reduced.submatrix(i2, i1);
-            L_i2i1_star = sub_i2i1.determination();
-            if ((i2 + i1) % 2 == 1) {
-                L_i2i1_star = L_i2i1_star * fraction(-1);
+            if (i2 < reduced_size && i1 < reduced_size && i2 >= 0 && i1 >= 0) {
+                matrix sub_i2i1 = L_reduced.submatrix(i2, i1);
+                L_i2i1_star = sub_i2i1.determination();
+                if ((i2 + i1) % 2 == 1) {
+                    L_i2i1_star = L_i2i1_star * fraction(-1);
+                }
+            } else {
+                L_i2i1_star = fraction(0);
             }
         }
 
