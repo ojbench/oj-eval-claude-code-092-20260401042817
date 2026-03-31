@@ -301,20 +301,46 @@ public:
     // TODO: 返回节点 interface_id1 和 interface_id2 (1-based)之间的等效电阻。
     //       保证 interface_id1 <= interface_id2 均合法。
     fraction get_equivalent_resistance(int interface_id1, int interface_id2) {
-        // 使用公式：R_{ij} = (L_{ii}^* + L_{jj}^* - L_{ij}^* - L_{ji}^*) / det(L_n)
-        // 其中 L^* 是 L 去掉最后一行和最后一列后的子矩阵的伴随矩阵元素
+        // 使用公式：R_{ij} = (L_{ii}^+ + L_{jj}^+ - L_{ij}^+ - L_{ji}^+) / det(L_{n-1})
+        // 其中 L^+ 是 L_{n-1} 的伴随矩阵，L_{n-1} 是去掉最后一行和最后一列的拉普拉斯矩阵
 
         if (interface_id1 == interface_id2) {
             return fraction(0);
         }
 
-        // 去掉最后一行和最后一列，得到 L_n-1
-        int reduced_size = interface_size - 1;
+        // 特殊情况：如果其中一个节点是最后一个节点
+        // R_{i,n} = L_{ii}^+ / det(L_{n-1})
+        if (interface_id2 == interface_size) {
+            int reduced_size = interface_size - 1;
+            matrix L_reduced(reduced_size, reduced_size);
+            for (int i = 0; i < reduced_size; i++) {
+                for (int j = 0; j < reduced_size; j++) {
+                    L_reduced(i+1, j) = laplace(i+1, j);
+                }
+            }
 
-        if (reduced_size <= 0) {
-            throw resistive_network_error();
+            fraction det_L = L_reduced.determination();
+            if (det_L.operator==(fraction(0))) {
+                throw resistive_network_error();
+            }
+
+            int i1 = interface_id1 - 1; // 0-based
+
+            if (reduced_size == 1) {
+                // 1x1矩阵的伴随矩阵元素为1
+                return fraction(1) / det_L;
+            } else {
+                matrix sub = L_reduced.submatrix(i1, i1);
+                fraction adj_element = sub.determination();
+                if ((i1 + i1) % 2 == 1) {
+                    adj_element = adj_element * fraction(-1);
+                }
+                return adj_element / det_L;
+            }
         }
 
+        // 去掉最后一行和最后一列，得到 L_{n-1}
+        int reduced_size = interface_size - 1;
         matrix L_reduced(reduced_size, reduced_size);
         for (int i = 0; i < reduced_size; i++) {
             for (int j = 0; j < reduced_size; j++) {
@@ -323,74 +349,54 @@ public:
         }
 
         fraction det_L = L_reduced.determination();
-
-        // 如果行列式为0，说明网络不连通或有其他问题
         if (det_L.operator==(fraction(0))) {
             throw resistive_network_error();
         }
 
         // 计算伴随矩阵的元素
-        // L_ii^* = det(去掉第i行第i列的子矩阵) * (-1)^(i+i)
         int i1 = interface_id1 - 1; // 转为0-based
         int i2 = interface_id2 - 1;
 
-        fraction L_i1i1_star, L_i2i2_star, L_i1i2_star, L_i2i1_star;
+        fraction L_i1i1_adj, L_i2i2_adj, L_i1i2_adj, L_i2i1_adj;
 
-        // 特殊情况：L_reduced 是 1x1 矩阵
         if (reduced_size == 1) {
-            // 对于1x1矩阵，它的伴随矩阵就是1
-            L_i1i1_star = fraction(1);
-            L_i2i2_star = fraction(1);
-            L_i1i2_star = fraction(1);
-            L_i2i1_star = fraction(1);
+            // 对于1x1矩阵，伴随矩阵元素都是1
+            L_i1i1_adj = fraction(1);
+            L_i2i2_adj = fraction(1);
+            L_i1i2_adj = fraction(1);
+            L_i2i1_adj = fraction(1);
         } else {
-            // 计算 L_{i1,i1}^*
-            if (i1 < reduced_size && i1 >= 0) {
-                matrix sub_i1i1 = L_reduced.submatrix(i1, i1);
-                L_i1i1_star = sub_i1i1.determination();
-                if ((i1 + i1) % 2 == 1) {
-                    L_i1i1_star = L_i1i1_star * fraction(-1);
-                }
-            } else {
-                L_i1i1_star = fraction(1);
+            // 计算 adj(L)_{i1,i1} = (-1)^{i1+i1} * M_{i1,i1}
+            matrix sub_i1i1 = L_reduced.submatrix(i1, i1);
+            L_i1i1_adj = sub_i1i1.determination();
+            if ((i1 + i1) % 2 == 1) {
+                L_i1i1_adj = L_i1i1_adj * fraction(-1);
             }
 
-            // 计算 L_{i2,i2}^*
-            if (i2 < reduced_size && i2 >= 0) {
-                matrix sub_i2i2 = L_reduced.submatrix(i2, i2);
-                L_i2i2_star = sub_i2i2.determination();
-                if ((i2 + i2) % 2 == 1) {
-                    L_i2i2_star = L_i2i2_star * fraction(-1);
-                }
-            } else {
-                L_i2i2_star = fraction(1);
+            // 计算 adj(L)_{i2,i2}
+            matrix sub_i2i2 = L_reduced.submatrix(i2, i2);
+            L_i2i2_adj = sub_i2i2.determination();
+            if ((i2 + i2) % 2 == 1) {
+                L_i2i2_adj = L_i2i2_adj * fraction(-1);
             }
 
-            // 计算 L_{i1,i2}^* (注意：余子式的符号)
-            if (i1 < reduced_size && i2 < reduced_size && i1 >= 0 && i2 >= 0) {
-                matrix sub_i1i2 = L_reduced.submatrix(i1, i2);
-                L_i1i2_star = sub_i1i2.determination();
-                if ((i1 + i2) % 2 == 1) {
-                    L_i1i2_star = L_i1i2_star * fraction(-1);
-                }
-            } else {
-                L_i1i2_star = fraction(0);
+            // 计算 adj(L)_{i1,i2} = (-1)^{i1+i2} * M_{i2,i1} (注意：伴随矩阵是转置的余子式矩阵)
+            matrix sub_i2i1_for_adj12 = L_reduced.submatrix(i2, i1);
+            L_i1i2_adj = sub_i2i1_for_adj12.determination();
+            if ((i1 + i2) % 2 == 1) {
+                L_i1i2_adj = L_i1i2_adj * fraction(-1);
             }
 
-            // 计算 L_{i2,i1}^*
-            if (i2 < reduced_size && i1 < reduced_size && i2 >= 0 && i1 >= 0) {
-                matrix sub_i2i1 = L_reduced.submatrix(i2, i1);
-                L_i2i1_star = sub_i2i1.determination();
-                if ((i2 + i1) % 2 == 1) {
-                    L_i2i1_star = L_i2i1_star * fraction(-1);
-                }
-            } else {
-                L_i2i1_star = fraction(0);
+            // 计算 adj(L)_{i2,i1} = (-1)^{i2+i1} * M_{i1,i2}
+            matrix sub_i1i2_for_adj21 = L_reduced.submatrix(i1, i2);
+            L_i2i1_adj = sub_i1i2_for_adj21.determination();
+            if ((i2 + i1) % 2 == 1) {
+                L_i2i1_adj = L_i2i1_adj * fraction(-1);
             }
         }
 
-        // R_{i1,i2} = (L_{i1,i1}^* + L_{i2,i2}^* - L_{i1,i2}^* - L_{i2,i1}^*) / det(L)
-        fraction numerator = L_i1i1_star + L_i2i2_star - L_i1i2_star - L_i2i1_star;
+        // R_{i1,i2} = (adj_{i1,i1} + adj_{i2,i2} - adj_{i1,i2} - adj_{i2,i1}) / det(L)
+        fraction numerator = L_i1i1_adj + L_i2i2_adj - L_i1i2_adj - L_i2i1_adj;
         fraction result = numerator / det_L;
 
         return result;
